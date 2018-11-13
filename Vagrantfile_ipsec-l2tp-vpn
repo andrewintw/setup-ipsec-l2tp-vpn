@@ -8,7 +8,7 @@ Vagrant.configure(2) do |config|
   l2tpd_ip_range="172.16.1.100-172.16.1.200"
   l2tpd_local_ip="172.16.1.1"
   l2tpd_ppp_user="andrew"
-  l2tpd_ppp_passwd="Gemtek1234"
+  l2tpd_ppp_passwd="vpnpasswd"
   
   # ----- Global -----	
   config.vm.box_check_update = false
