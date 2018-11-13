@@ -1,0 +1,270 @@
+# -*- mode: ruby -*-
+# vi: set ft=ruby :
+
+Vagrant.configure(2) do |config|
+  # ----- my variables -----	
+  myvm_name = "trusty32-vpn"
+  ipsec_psk=""
+  l2tpd_ip_range="172.16.1.100-172.16.1.200"
+  l2tpd_local_ip="172.16.1.1"
+  l2tpd_ppp_user="andrew"
+  l2tpd_ppp_passwd="Gemtek1234"
+  
+  # ----- Global -----	
+  config.vm.box_check_update = false
+  #config.vm.usable_port_range =  (2200..2250)
+
+  # ----- VM1 -----
+  config.vm.define "#{myvm_name}" do |config|
+	config.vm.box = "trusty32"
+	config.vm.box_url = "https://cloud-images.ubuntu.com/vagrant/trusty/current/trusty-server-cloudimg-i386-vagrant-disk1.box"
+	config.vm.hostname = "#{myvm_name}"
+	config.vm.host_name = "#{myvm_name}"
+
+	config.vm.network :forwarded_port, guest: 22, host: 2222, id: "ssh", disabled: "true"
+	config.vm.network :forwarded_port, guest: 22, host: 2202, auto_correct: true
+	#config.vm.network "public_network", bridge: "Realtek PCIe GBE Family Controller", adapter: "1", ip: "192.168.90.222"
+	config.vm.network "public_network",
+						use_dhcp_assigned_default_route: true,
+						bridge: "Realtek PCIe GBE Family Controller",
+						#bridge: "Intel(R) Dual Band Wireless-AC 8260",
+						#:dev => "eth1",
+						#adapter: "1",
+						:mode => 'bridge',
+						auto_config: true
+
+	config.vm.synced_folder "C:/home/ws/VMs/#{myvm_name}", "/vagrant"
+
+	config.ssh.username = "vagrant"
+	config.ssh.password = "vagrant"
+	#config.ssh.insert_key = true
+	config.ssh.insert_key = false
+
+	config.vm.provider "virtualbox" do |vb|
+		vb.memory = 1024
+		vb.cpus = 2
+		vb.name = "vbox-trusty32-vpn"
+		vb.customize ["modifyvm", :id, "--usb", "on"]
+		vb.customize ["modifyvm", :id, "--usbehci", "on"]
+		vb.customize ["modifyvm", :id, "--usbxhci", "on"]
+		vb.customize ["usbfilter",
+					  "add", "0",
+					  "--target", :id,
+					  "--active", "yes",
+					  "--name", "Prolific Technology Inc. USB-Serial Controller",
+					  "--vendorid", "067b",
+					  "--productid", "2303",
+					  "--revision", "0300",
+					  "--manufacturer", "Prolific Technology Inc.",
+					  "--product", "USB-Serial Controller",
+					  "--remote", "no"]
+	end
+
+	# ----- VM1:provision:INIT_CONFIG -----
+	config.vm.provision "shell", 
+	run: "never", 
+	inline: <<-INIT_CONFIG
+		echo "*** initial config ***"
+		export LANGUAGE=en_US.UTF-8
+		export LANG=en_US.UTF-8
+		export LC_ALL=en_US.UTF-8
+		locale-gen en_US.UTF-8
+		dpkg-reconfigure locales
+	INIT_CONFIG
+
+	# ----- VM1:provision:PKG_INSTALL -----
+	#   you can also use: run: "never|always",
+	config.vm.provision "shell", 
+	#run: "never",
+	inline: <<-PKG_INSTALL
+		echo "*** update apt-repository ***"
+		apt-get update -qq
+
+		echo "*** installing useful pkgs ***"
+		DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends lftp tree vim unzip git
+		#DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends git-review subversion ctags tmux dos2unix samba
+
+		#echo "*** installing pkgs for OpenWRT build system ***"
+		#DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends \
+		#					 build-essential libncurses5-dev zlib1g-dev git-core \
+		#					 gawk flex quilt xsltproc mercurial unzip
+		#DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends \
+		#					 texlive-base texlive-fonts-recommended texlive-fonts-extra \
+		#					 texlive-latex-base texlive-latex-extra tex4ht
+
+		#echo "*** installing repo ***"
+		#if [ ! -f /usr/local/bin/repo ]; then
+		#	curl -s https://storage.googleapis.com/git-repo-downloads/repo > /usr/local/bin/repo
+		#	chmod a+x /usr/local/bin/repo
+		#fi
+
+	PKG_INSTALL
+
+	# ----- VM1:provision:ENV_CONFIG -----
+	config.vm.provision "shell", 
+	#run: "never",
+	inline: <<-ENV_CONFIG
+		echo "*** config timezone ***"
+		sudo timedatectl set-ntp true
+		sudo timedatectl set-timezone 'Asia/Taipei'
+
+		echo "*** linking /bin/sh to bash instead of dash ***"
+		echo "dash dash/sh boolean false" | debconf-set-selections
+		DEBIAN_FRONTEND=noninteractive dpkg-reconfigure dash
+	ENV_CONFIG
+
+	# ----- VM1:provision:TEST_CONFIG -----
+	config.vm.provision "shell", 
+	run: "never",
+	inline: <<-TEST_CONFIG
+		echo "*** only for test ***"
+	TEST_CONFIG
+
+	# ----- VM1:provision:NET_CONFIG -----
+	config.vm.provision "shell", 
+	#run: "always", 
+	run: "never",
+	inline: <<-NET_CONFIG
+		echo "*** customize network config ***"
+		#route del default gw 10.0.2.2
+		#route add default gw 10.5.161.254
+	NET_CONFIG
+
+	# ----- VM1:provision:CONFIG_VPN -----
+	config.vm.provision "shell", 
+	#run: "never",
+	inline: <<-CONFIG_VPN
+		echo "*** customize VPN config ***"
+		DEBIAN_FRONTEND=noninteractive apt-get install -y -qq openswan xl2tpd ppp lsof
+		
+		config_file="/etc/sysctl.conf"
+		if [ -f $config_file ] && [ ! -f ${config_file}.BAK ]; then
+			cp $config_file ${config_file}.BAK
+		fi
+		echo "net.ipv4.ip_forward = 1" | tee -a $config_file
+		echo "net.ipv4.conf.all.accept_redirects = 0"| tee -a $config_file
+		echo "net.ipv4.conf.all.send_redirects = 0"| tee -a $config_file
+		
+		for vpn in /proc/sys/net/ipv4/conf/*; do echo 0 > $vpn/accept_redirects; echo 0 > $vpn/send_redirects; done
+		sysctl -p
+		#ipsec verify
+
+		config_file="/etc/ipsec.conf"
+		if [ -f $config_file ] && [ ! -f ${config_file}.BAK ]; then
+			cp $config_file ${config_file}.BAK
+		fi
+		cat <<EOF >$config_file
+version 2
+
+config setup
+    dumpdir=/var/run/pluto/
+    nat_traversal=yes
+    virtual_private=%v4:10.0.0.0/8,%v4:192.168.0.0/16,%v4:172.16.0.0/12,%v6:fd00::/8,%v6:fe80::/10
+    protostack=netkey
+    force_keepalive=yes
+    keep_alive=60
+
+conn L2TP-PSK-noNAT
+    authby=secret
+    pfs=no
+    auto=add
+    keyingtries=3
+    ikelifetime=8h
+    keylife=1h
+    ike=aes256-sha1,aes128-sha1,3des-sha1
+    phase2alg=aes256-sha1,aes128-sha1,3des-sha1
+    type=transport
+    left=`ifconfig eth1 | awk '/inet addr/{print substr($2,6)}'`
+    leftprotoport=17/1701
+    right=%any
+    rightprotoport=17/%any
+    dpddelay=10
+    dpdtimeout=20
+    dpdaction=clear
+EOF
+
+		config_file="/etc/ipsec.secrets"
+		if [ -f $config_file ] && [ ! -f ${config_file}.BAK ]; then
+			cp $config_file ${config_file}.BAK
+		fi
+		ipsec_psk=`openssl rand -hex 30`
+		cat <<EOF >$config_file
+`ifconfig eth1 | awk '/inet addr/{print substr($2,6)}'`   %any:  PSK "$ipsec_psk"
+EOF
+		config_file="/etc/xl2tpd/xl2tpd.conf"
+		if [ -f $config_file ] && [ ! -f ${config_file}.BAK ]; then
+			cp $config_file ${config_file}.BAK
+		fi
+		cat <<EOF >$config_file
+[global]
+ipsec saref = yes
+saref refinfo = 30
+
+;debug avp = yes
+;debug network = yes
+;debug state = yes
+;debug tunnel = yes
+
+[lns default]
+ip range = #{l2tpd_ip_range}
+local ip = #{l2tpd_local_ip}
+refuse pap = yes
+require authentication = yes
+;ppp debug = yes
+pppoptfile = /etc/ppp/options.xl2tpd
+length bit = yes
+EOF
+
+		config_file="/etc/ppp/options.xl2tpd"
+		if [ -f $config_file ] && [ ! -f ${config_file}.BAK ]; then
+			cp $config_file ${config_file}.BAK
+		fi
+		cat <<EOF >$config_file
+require-mschap-v2
+ms-dns 8.8.8.8
+ms-dns 8.8.4.4
+auth
+mtu 1200
+mru 1000
+crtscts
+hide-password
+modem
+name l2tpd
+proxyarp
+lcp-echo-interval 30
+lcp-echo-failure 4
+EOF
+
+		config_file="/etc/ppp/chap-secrets"
+		if [ -f $config_file ] && [ ! -f ${config_file}.BAK ]; then
+			cp $config_file ${config_file}.BAK
+		fi
+		cat <<EOF >$config_file
+# Secrets for authentication using CHAP
+# client	server	secret			IP addresses
+#{l2tpd_ppp_user}		l2tpd	#{l2tpd_ppp_passwd}		*
+EOF
+
+	/etc/init.d/ipsec restart 
+	/etc/init.d/xl2tpd restart
+	CONFIG_VPN
+	
+	# ----- VM1:provision:CONFIG_DONE -----
+	config.vm.provision "shell", 
+	run: "always", 
+	inline: <<-CONFIG_DONE
+		echo ""
+		echo "*** ip address: $(ifconfig eth1 | awk '/inet addr/{print substr($2,6)}') ***"
+		echo ""
+		echo "*** VPN info ***"
+		test -f /etc/ipsec.conf && echo "vpn server: `cat /etc/ipsec.conf | grep left= | awk -F '=' '{print $2}'`"
+		test -f /etc/ppp/chap-secrets && echo "l2tpd ppp : `cat /etc/ppp/chap-secrets | tail -n 1 | awk '{print $1}'` / `cat /etc/ppp/chap-secrets | tail -n 1 | awk '{print $3}'`"
+		test -f /etc/ipsec.secrets && echo "ipsec psk : `cat /etc/ipsec.secrets | tail -n 1 | awk '{print $4}'`"
+	CONFIG_DONE
+
+	config.vm.post_up_message = <<-MESSAGE
+*** config.vm.was started :-) ***
+	MESSAGE
+  end
+  # ----- END VM1 -----
+end
